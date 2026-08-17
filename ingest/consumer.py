@@ -53,7 +53,7 @@ TABLE = "bronze_events_stream"
 
 DDL = f"""
 create table if not exists {TABLE} (
-    event_id      varchar,
+    event_id      varchar primary key,
     ticket_id     varchar,
     customer_id   varchar,
     customer_name varchar,
@@ -72,7 +72,20 @@ def write_batch(con: duckdb.DuckDBPyConnection, batch: list[dict]) -> None:
     một hàng mới. Xem khung mã giả ở đầu file.
     """
     con.executemany(
-        f"insert into {TABLE} values (?, ?, ?, ?, ?, ?, ?, ?)",
+        f"""
+        insert into {TABLE} (
+            event_id, ticket_id, customer_id, customer_name,
+            event_type, latency_ms, event_time, _ingested_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict (event_id) do update set
+            ticket_id = excluded.ticket_id,
+            customer_id = excluded.customer_id,
+            customer_name = excluded.customer_name,
+            event_type = excluded.event_type,
+            latency_ms = excluded.latency_ms,
+            event_time = excluded.event_time,
+            _ingested_at = excluded._ingested_at
+        """,
         [
             (
                 r["event_id"], r["ticket_id"], r["customer_id"], r["customer_name"],
@@ -112,9 +125,9 @@ def consume(
             # ── KHỐI CẦN XEM XÉT — nhiệm vụ 5, hạng mục (a) ───────────────
             # Ba dòng dưới đây được phép sắp xếp lại. maybe_crash() mô phỏng
             # `kill -9`: tiến trình chết ngay tại vị trí của nó, không rollback.
-            consumer.commit()                 # ghi nhận offset
-            maybe_crash(batch_no, crash_at)   # sự cố xảy ra tại đây
-            write_batch(con, batch)           # ghi dữ liệu
+            write_batch(con, batch)           # ghi dữ liệu trước
+            maybe_crash(batch_no, crash_at)   # sự cố trước khi commit offset
+            consumer.commit()                 # ghi nhận offset sau khi ghi
             # ─────────────────────────────────────────────────────────────
 
             written += len(batch)
